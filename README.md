@@ -85,6 +85,9 @@ cruises:
 1. You can delete the whatsapp line, that is included so you know how to add other services. You can also add more lines for an additional gmail accounts.
 1. To test apprise, add a key in your config.yaml that says `apprise_test: true` . This will send a notification, then quit and not run the price check. This key goes above the `apprise:` keys not inside it (see `Edit Config File` section above). Once you know apprise is working, remove the line or set value to `false`
 
+## Additonal Orders (Optional)
+You can find these values by browings the cruise add-ons for your desired cruise.
+
 ## Run
 1. `python CheckRoyalCaribbeanPrice.py` (recommended, any OS) or `CheckRoyalCaribbeanPrice.exe` (Windows only)
     - It will indicate if you should rebook or if you have the best price
