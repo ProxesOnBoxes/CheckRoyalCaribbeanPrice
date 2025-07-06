@@ -10,6 +10,8 @@ import json
 
 
 appKey = "hyNNqIPHHzaLzVpcICPdAdbFV8yvTsAm"
+cruiseLineName = ""
+already_checked_items = {}
 
 def main():
 
@@ -52,9 +54,25 @@ def main():
     
         if 'cruises' in data:
             for cruises in data['cruises']:
-                    cruiseURL = cruises['cruiseURL'] 
-                    paidPrice = float(cruises['paidPrice'])
-                    get_cruise_price(cruiseURL, paidPrice, apobj)
+                cruiseURL = cruises['cruiseURL'] 
+                paidPrice = float(cruises['paidPrice'])
+                get_cruise_price(cruiseURL, paidPrice, apobj)
+
+        # Support for additional orders to check
+        if 'additional_orders' in data:
+            # Use the last set of access_token, accountId, session, cruiseLineName from accountInfo
+            for order in data['additional_orders']:
+                reservationId = order['reservationId']
+                ship = order['ship']
+                startDate = order['startDate']
+                prefix = order['prefix']
+                paidPrice = float(order['paidPrice'])
+                product = order['product']
+                # apobj and session/account info already set from previous login
+                try:
+                    getNewBeveragePrice(access_token, accountId, session, reservationId, ship, startDate, prefix, paidPrice, product, apobj)
+                except Exception as e:
+                    print(f"Error checking additional order {reservationId}: {e}")
             
 def login(username,password,session,cruiseLineName):
     headers = {
@@ -82,6 +100,13 @@ def login(username,password,session,cruiseLineName):
 
 def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startDate,prefix,paidPrice,product,apobj):    
     
+
+    # Check if the item has already been checked
+    item_key = f"{ship}_{startDate}_{prefix}_{product}"
+    if item_key in already_checked_items:
+        print(f"Skipping already checked item: {already_checked_items[item_key]}")
+        return
+
     headers = {
         'Access-Token': access_token,
         'AppKey': appKey,
@@ -89,10 +114,11 @@ def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startD
     }
 
     params = {
-        'reservationId': reservationId,
         'startDate': startDate,
         'currencyIso': 'USD',
     }
+    if reservationId:
+        params['reservationId'] = reservationId
 
     response = session.get(
         'https://aws-prd.api.rccl.com/en/royal/web/commerce-api/catalog/v2/' + ship + '/categories/' + prefix + '/products/' + str(product),
@@ -101,7 +127,10 @@ def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startD
     )
     
     title = response.json().get("payload").get("title")
-    
+
+    already_checked_items[item_key] = title  # Mark this item as checked
+
+
     try:
         newPricePayload = response.json().get("payload").get("startingFromPrice")
     except:
