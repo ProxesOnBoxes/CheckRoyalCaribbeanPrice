@@ -12,8 +12,10 @@ import json
 appKey = "hyNNqIPHHzaLzVpcICPdAdbFV8yvTsAm"
 cruiseLineName = ""
 already_checked_items = {}
+reservation_friendly_names = {}
 
 def main():
+    global reservation_friendly_names
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(timestamp)
@@ -33,6 +35,9 @@ def main():
             print("Apprise Notification Sent...quitting")
             quit()
 
+        # Support for additional orders to check
+        if 'reservation_friendly_names' in data:
+            reservation_friendly_names = data['reservation_friendly_names']
         
         if 'accountInfo' in data:
             for accountInfo in data['accountInfo']:
@@ -58,7 +63,6 @@ def main():
                 paidPrice = float(cruises['paidPrice'])
                 get_cruise_price(cruiseURL, paidPrice, apobj)
 
-        # Support for additional orders to check
         if 'additional_orders' in data:
             # Use the last set of access_token, accountId, session, cruiseLineName from accountInfo
             for order in data['additional_orders']:
@@ -70,9 +74,9 @@ def main():
                 product = order['product']
                 # apobj and session/account info already set from previous login
                 try:
-                    getNewBeveragePrice(access_token, accountId, session, reservationId, ship, startDate, prefix, paidPrice, product, apobj)
+                    getNewBeveragePrice(access_token, accountId, session, reservationId, ship, startDate, prefix, paidPrice, product, apobj, is_additional_order=True)
                 except Exception as e:
-                    print(f"Error checking additional order {reservationId}: {e}")
+                    print(f"Error checking additional order {getFriendlyName(reservationId)} - {reservationId}: {e}")
             
 def login(username,password,session,cruiseLineName):
     headers = {
@@ -98,13 +102,27 @@ def login(username,password,session,cruiseLineName):
     accountId = auth_info["sub"]
     return access_token,accountId,session
 
-def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startDate,prefix,paidPrice,product,apobj):    
-    
+def getFriendlyName(reservationId):
+    """
+    @param reservationId: The reservation ID to look up as a string.
+    @returns a friendly name for the reservationId if it exists in the mapping, otherwise an empty string.
+    @brief Returns a friendly name for the reservationId if it exists in the mapping.
+    """
+
+    global reservation_friendly_names
+    if reservationId and str(reservationId) in reservation_friendly_names:
+        return reservation_friendly_names[str(reservationId)]
+    return ""
+
+def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startDate,prefix,paidPrice,product,apobj, is_additional_order=False, number_of_devices=1):
+    global already_checked_items
+    global reservation_friendly_names
+    friendly_cruise_name = getFriendlyName(reservationId)
 
     # Check if the item has already been checked
     item_key = f"{ship}_{startDate}_{prefix}_{product}"
     if item_key in already_checked_items:
-        print(f"Skipping already checked item: {already_checked_items[item_key]}")
+        print(friendly_cruise_name + f": Skipping already checked item: {already_checked_items[item_key]}")
         return
 
     headers = {
@@ -126,31 +144,76 @@ def getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startD
         headers=headers,
     )
     
-    title = response.json().get("payload").get("title")
+    addon_name = response.json().get("payload").get("title")
 
-    already_checked_items[item_key] = title  # Mark this item as checked
+    already_checked_items[item_key] = addon_name  # Mark this item as checked
 
+    name_and_reservation = friendly_cruise_name + " (" + reservationId + "): "
 
     try:
         newPricePayload = response.json().get("payload").get("startingFromPrice")
     except:
-        print(title + " is No Longer For Sale")
+        print(name_and_reservation + addon_name + " is No Longer For Sale")
         return
         
+    currentPrice = get_current_price(prefix, number_of_devices, newPricePayload)
+
+    # TODO: Update remove this and/or update the generic addon logic once internet packages support is fully implemented
+    if (prefix == "pt_internet") and (number_of_devices > 1):
+        email_title = "Cruise Addon Price Manual Check"
+        if friendly_cruise_name:
+            email_title += " for " + friendly_cruise_name
+        email_body = name_and_reservation + "Cruise Addon Price for Internet Package is not fully implemented yet for multiple devices. Please check manually, but current price for one device is " + str(currentPrice) + "."
+        email_body += "\n\n"
+        email_body += "The price for multiple devices can be found at:\n"
+        email_body += "https://www.royalcaribbean.com/account/cruise-planner/category/"+prefix+"/product/"+str(product)+"?bookingId="+reservationId+"&shipCode="+ship+"&sailDate="+startDate
+
+        apobj.notify(body=email_body, title=email_title)
+        print(email_body)
+        return
+
+    if currentPrice < paidPrice:
+        email_title = "Cruise Addon Price Alert"
+        email_body = ""
+        if is_additional_order:
+            email_title += " For Watched Item"
+
+        # Try to get a friendly name from the mapping if reservationId is set
+        if friendly_cruise_name:
+            email_title += " for " + friendly_cruise_name
+
+        if is_additional_order:
+            email_body += name_and_reservation + "Watched item " + addon_name + " Price is lower: " + str(currentPrice) + " than " + str(paidPrice)
+        else:
+            email_body += name_and_reservation + "Rebook! " + addon_name + " Price is lower: " + str(currentPrice) + " than " + str(paidPrice)
+
+        web_url = "https://www.royalcaribbean.com/account/cruise-planner/category/"+prefix+"/product/"+str(product)+"?bookingId="+reservationId+"&shipCode="+ship+"&sailDate="+startDate
+
+        email_body += " " + web_url
+        print(email_body)
+        apobj.notify(body=email_body, title=email_title)
+    else:
+        print(name_and_reservation + "You have the best price for " + addon_name +  " of: " + str(paidPrice))
+        
+    if currentPrice > paidPrice:
+        print(name_and_reservation + "\t " + "Price of " + addon_name + " is now higher: " + str(currentPrice))
+
+def get_current_price(prefix, number_of_devices, newPricePayload):
+    """
+    Currently this is mostly just a placeholder function, as the logic for correctly handling multiple devices
+    for internet packages is not fully implemented yet.
+
+    @brief Returns the current price based on the prefix and newPricePayload.
+    @param prefix: The prefix of the product type (e.g., beverage, internet).
+    @param number_of_devices: The number of devices for internet packages.
+    @param newPricePayload: The payload containing price information.
+    @returns: The current price as a float.
+    """
     currentPrice = newPricePayload.get("adultPromotionalPrice")
     
     if not currentPrice:
         currentPrice = newPricePayload.get("adultShipboardPrice")
-    
-    if currentPrice < paidPrice:
-        text = reservationId + ": Rebook! " + title + " Price is lower: " + str(currentPrice) + " than " + str(paidPrice)
-        print(text)
-        apobj.notify(body=text, title='Cruise Addon Price Alert')
-    else:
-        print(reservationId + ": " + "You have the best price for " + title +  " of: " + str(paidPrice))
-        
-    if currentPrice > paidPrice:
-        print(reservationId + ": \t " + "Price of " + title + " is now higher: " + str(currentPrice))
+    return currentPrice
 
 def getLoyalty(access_token,accountId,session):
 
@@ -198,9 +261,11 @@ def getVoyages(access_token,accountId,session,apobj,cruiseLineName):
         numberOfNights = booking.get("numberOfNights")
         shipCode = booking.get("shipCode")
         
-        print(reservationId + ": " + sailDate + " " + shipCode + " Room " + booking.get("stateroomNumber"))
+        name_and_reservation = getFriendlyName(str(reservationId)) + "(" + reservationId + "): "
+
+        print(name_and_reservation + sailDate + " " + shipCode + " Room " + booking.get("stateroomNumber"))
         if booking.get("balanceDue") is True:
-            print(reservationId + ": " + "Remaining Cruise Payment Balance is $" + str(booking.get("balanceDueAmount")))
+            print(name_and_reservation + "Remaining Cruise Payment Balance is $" + str(booking.get("balanceDueAmount")))
             
         getOrders(access_token,accountId,session,reservationId,passengerId,shipCode,sailDate,numberOfNights,apobj)
     
@@ -274,7 +339,8 @@ def getOrders(access_token,accountId,session,reservationId,passengerId,ship,star
                 params=params,
                 headers=headers,
             )
-                    
+            
+            number_of_devices = 1  # This is only used for internet packages, default to 1 device
             for orderDetail in response.json().get("payload").get("orderHistoryDetailItems"):
                 # check for cancelled status at item-level
                 if orderDetail.get("guests")[0].get("orderStatus") == "CANCELLED":
@@ -286,11 +352,15 @@ def getOrders(access_token,accountId,session,reservationId,passengerId,ship,star
                 if paidPrice == 0:
                     continue
                 # These packages report total price, must divide by number of days
-                if prefix == "pt_beverage" or prefix == "pt_internet":
+                if prefix == "pt_beverage":
                       if not order_title.startswith("Evian") and not order_title.startswith("Specialty Coffee"):
                           paidPrice = round(paidPrice / numberOfNights,2)
-                   
-                getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startDate,prefix,paidPrice,product,apobj)
+                if prefix == "pt_internet":
+                    # TODO: very quick and dirty fix, to handle my current situation may break for others
+                    number_of_devices = int(orderDetail.get("guests")[0].get("promoDescription").get("code").split('33S')[1][0])
+                    paidPrice = round(paidPrice / number_of_devices / numberOfNights, 2)
+
+                getNewBeveragePrice(access_token,accountId,session,reservationId,ship,startDate,prefix,paidPrice,product,apobj, number_of_devices=number_of_devices)
 
 def get_cruise_price(url, paidPrice, apobj):
     headers = {

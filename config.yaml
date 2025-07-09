@@ -8,9 +8,14 @@ cruises: # Optional, Only needed if you want to check cruise price
 apprise:  # Optional, see https://github.com/caronc/apprise, can have as many lines as you want.
   - url: "mailto://user:password@gmail.com"
 additional_orders:
-  - reservationId: None 
-    ship: "ST" 
+  - reservationId: "501337"
+    friendlyName: "Deluxe Beverage Package"
+    ship: "ST"
     startDate: "2026-06-18"
-    prefix: "pt_shoreX"
-    paidPrice: 999.99
-    product: ABC1
+    prefix: "pt_beverage"
+    paidPrice: 45.00
+    product: 3222
+
+reservation_friendly_names:
+  '31337': "example friendly cruise name"
+  
